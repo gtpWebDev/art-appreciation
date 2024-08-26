@@ -13,11 +13,71 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// User for application authentication
 model User {
-  id         Int      @id @default(autoincrement())
-  username   String   @unique
-  salt       String
-  hash       String
-  admin      Boolean  @default(false)
+  id       Int     @id @default(autoincrement())
+  username String  @unique
+  salt     String
+  hash     String
+  admin    Boolean @default(false)
 }
 
+// TzAccountOwner is the person behind one or more TzAccounts
+model TzAccountOwner {
+  id        Int         @id @default(autoincrement())
+  TzAccount TzAccount[]
+}
+
+// TzAccount is the unique account through which all transactions are applied on the Tezos blockchain
+model TzAccount {
+  id       Int            @id @default(autoincrement())
+  address  String         @unique
+  artist   Boolean        @default(false)
+  owner    TzAccountOwner @relation(fields: [ownerId], references: [id])
+  ownerId  Int
+  score    Decimal        // not sure yet whether this will be maintained or calculated
+  Purchase Purchase[]
+  Listing  Listing[]
+}
+
+// Collection is an art project consisting of 1 or many Nfts
+model Collection {
+  id             Int    @id @default(autoincrement())
+  fxCollectionId String @unique
+  Nft            Nft[]
+}
+
+// Nft is an individual piece of generative art
+model Nft {
+  id           Int        @id @default(autoincrement())
+  fxNftId      String     @unique
+  collection   Collection @relation(fields: [collectionId], references: [id])
+  collectionId Int
+  Purchase     Purchase[]
+  Listing      Listing[]
+}
+
+// Purchases consist of Primary (from artist) or Secondary (from owners)
+model Purchase {
+  id        Int       @id @default(autoincrement())
+  isPrimary Boolean
+  nft       Nft       @relation(fields: [nftId], references: [id])
+  nftId     Int
+  account   TzAccount @relation(fields: [accountId], references: [id])
+  accountId Int
+  priceTz     Decimal
+  timestamp DateTime
+  score     Decimal
+}
+
+// Listings consist of listings and delistings
+model Listing {
+  id        Int       @id @default(autoincrement())
+  isListing Boolean
+  nft       Nft       @relation(fields: [nftId], references: [id])
+  nftId     Int
+  account   TzAccount @relation(fields: [accountId], references: [id])
+  accountId Int
+  timestamp DateTime
+  score Decimal
+}
