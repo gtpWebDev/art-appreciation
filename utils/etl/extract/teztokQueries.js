@@ -130,6 +130,7 @@ async function teztok_FxhashActivityOnDate(limit, offset, dateString) {
           timestamp
           token {
             token_id
+            fx_issuer_id
           }
           price
           buyer_address

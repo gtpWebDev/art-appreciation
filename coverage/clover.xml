@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<coverage generated="1724682045946" clover="3.2.0">
+  <project timestamp="1724682045946" name="All files">
+    <metrics statements="37" coveredstatements="37" conditionals="19" coveredconditionals="18" methods="3" coveredmethods="3" elements="59" coveredelements="58" complexity="0" loc="37" ncloc="37" packages="2" files="3" classes="3"/>
+    <package name="constants">
+      <metrics statements="3" coveredstatements="3" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+      <file name="fxhashConstants.js" path="/home/glenpearson/repos/art-appreciation-backend/constants/fxhashConstants.js">
+        <metrics statements="3" coveredstatements="3" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>
+        <line num="1" count="1" type="stmt"/>
+        <line num="4" count="1" type="stmt"/>
+        <line num="9" count="1" type="stmt"/>
+      </file>
+    </package>
+    <package name="utils.etl.transform">
+      <metrics statements="34" coveredstatements="34" conditionals="19" coveredconditionals="18" methods="3" coveredmethods="3"/>
+      <file name="aaiScore.js" path="/home/glenpearson/repos/art-appreciation-backend/utils/etl/transform/aaiScore.js">
+        <metrics statements="11" coveredstatements="11" conditionals="2" coveredconditionals="1" methods="2" coveredmethods="2"/>
+        <line num="23" count="1" type="stmt"/>
+        <line num="29" count="13" type="cond" truecount="1" falsecount="1"/>
+        <line num="34" count="13" type="stmt"/>
+        <line num="37" count="13" type="stmt"/>
+        <line num="39" count="13" type="stmt"/>
+        <line num="44" count="13" type="stmt"/>
+        <line num="45" count="13" type="stmt"/>
+        <line num="53" count="1" type="stmt"/>
+        <line num="54" count="26" type="stmt"/>
+        <line num="55" count="26" type="stmt"/>
+        <line num="58" count="1" type="stmt"/>
+      </file>
+      <file name="processTransaction.js" path="/home/glenpearson/repos/art-appreciation-backend/utils/etl/transform/processTransaction.js">
+        <metrics statements="23" coveredstatements="23" conditionals="17" coveredconditionals="17" methods="1" coveredmethods="1"/>
+        <line num="1" count="1" type="stmt"/>
+        <line num="3" count="1" type="stmt"/>
+        <line num="11" count="1" type="stmt"/>
+        <line num="12" count="13" type="stmt"/>
+        <line num="13" count="13" type="stmt"/>
+        <line num="14" count="13" type="stmt"/>
+        <line num="15" count="13" type="stmt"/>
+        <line num="16" count="13" type="stmt"/>
+        <line num="18" count="13" type="cond" truecount="13" falsecount="0"/>
+        <line num="25" count="5" type="stmt"/>
+        <line num="30" count="9" type="stmt"/>
+        <line num="31" count="9" type="stmt"/>
+        <line num="37" count="2" type="stmt"/>
+        <line num="41" count="4" type="stmt"/>
+        <line num="45" count="13" type="cond" truecount="2" falsecount="0"/>
+        <line num="46" count="9" type="stmt"/>
+        <line num="52" count="4" type="stmt"/>
+        <line num="58" count="13" type="stmt"/>
+        <line num="59" count="13" type="stmt"/>
+        <line num="60" count="13" type="stmt"/>
+        <line num="66" count="13" type="cond" truecount="2" falsecount="0"/>
+        <line num="70" count="13" type="stmt"/>
+        <line num="73" count="1" type="stmt"/>
+      </file>
+    </package>
+  </project>
+</coverage>

@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "devstart": "nodemon ./bin/www",
-    "serverstart": "DEBUG=projectname:* npm run devstart"
+    "serverstart": "DEBUG=projectname:* npm run devstart",
+    "test": "jest",
+    "watch": "jest --watch *.js"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",
@@ -27,6 +29,7 @@
     "passport-local": "^1.0.0"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "nodemon": "^3.1.4",
     "prisma": "^5.18.0"
   }

@@ -24,8 +24,9 @@ model User {
 
 // TzAccountOwner is the person behind one or more TzAccounts
 model TzAccountOwner {
-  id        Int         @id @default(autoincrement())
-  TzAccount TzAccount[]
+  id         Int         @id @default(autoincrement())
+  address    String      @unique
+  tz_account TzAccount[]
 }
 
 // TzAccount is the unique account through which all transactions are applied on the Tezos blockchain
@@ -33,51 +34,84 @@ model TzAccount {
   id       Int            @id @default(autoincrement())
   address  String         @unique
   artist   Boolean        @default(false)
-  owner    TzAccountOwner @relation(fields: [ownerId], references: [id])
-  ownerId  Int
-  score    Decimal        // not sure yet whether this will be maintained or calculated
+  owner    TzAccountOwner @relation(fields: [owner_id], references: [id])
+  owner_id Int
+  score    Decimal? // not sure yet whether this will be maintained or calculated
   Purchase Purchase[]
   Listing  Listing[]
+
+  @@index([address]) // support identifying new accounts
 }
 
 // Collection is an art project consisting of 1 or many Nfts
+// fx_collection_id used as primary key as well controlled int
 model Collection {
-  id             Int    @id @default(autoincrement())
-  fxCollectionId String @unique
-  Nft            Nft[]
+  id  Int   @id @unique
+  nft Nft[]
 }
 
 // Nft is an individual piece of generative art
 model Nft {
-  id           Int        @id @default(autoincrement())
-  fxNftId      String     @unique
-  collection   Collection @relation(fields: [collectionId], references: [id])
-  collectionId Int
-  Purchase     Purchase[]
-  Listing      Listing[]
+  id            Int        @id @default(autoincrement())
+  fx_nft_id     String     @unique
+  collection    Collection @relation(fields: [collection_id], references: [id])
+  collection_id Int
+  Purchase      Purchase[]
+  Listing       Listing[]
+
+  @@index([fx_nft_id]) // support identifying new Nfts
 }
 
 // Purchases consist of Primary (from artist) or Secondary (from owners)
 model Purchase {
-  id        Int       @id @default(autoincrement())
-  isPrimary Boolean
-  nft       Nft       @relation(fields: [nftId], references: [id])
-  nftId     Int
-  account   TzAccount @relation(fields: [accountId], references: [id])
-  accountId Int
-  priceTz     Decimal
-  timestamp DateTime
-  score     Decimal
+  id         Int       @id @default(autoincrement())
+  is_primary Boolean
+  nft        Nft       @relation(fields: [nft_id], references: [id])
+  nft_id     Int
+  account    TzAccount @relation(fields: [account_id], references: [id])
+  account_id Int
+  price_tz   Decimal
+  timestamp  DateTime
+  score      Decimal
+}
+
+// Staging table. nftId and accountId are in their raw forms.
+model PurchaseStaging {
+  id             Int      @id @default(autoincrement())
+  is_primary     Boolean
+  fx_nft_id      String
+  collection_id  Int
+  raw_account_id String
+  price_tz       Decimal
+  timestamp      DateTime
+
+  @@index([fx_nft_id]) // support identifying new Nfts
+  @@index([collection_id]) // support identifying new Collections
+  @@index([raw_account_id]) // support identifying new accounts
 }
 
 // Listings consist of listings and delistings
 model Listing {
-  id        Int       @id @default(autoincrement())
-  isListing Boolean
-  nft       Nft       @relation(fields: [nftId], references: [id])
-  nftId     Int
-  account   TzAccount @relation(fields: [accountId], references: [id])
-  accountId Int
-  timestamp DateTime
-  score Decimal
+  id         Int       @id @default(autoincrement())
+  is_listing Boolean
+  nft        Nft       @relation(fields: [nft_id], references: [id])
+  nft_id     Int
+  account    TzAccount @relation(fields: [account_id], references: [id])
+  account_id Int
+  timestamp  DateTime
+  score      Decimal
+}
+
+// Staging table. nftId and accountId are in their raw forms.
+model ListingStaging {
+  id             Int      @id @default(autoincrement())
+  is_listing     Boolean
+  fx_nft_id      String
+  collection_id  Int
+  raw_account_id String
+  timestamp      DateTime
+
+  @@index([fx_nft_id]) // support identifying new Nfts
+  @@index([collection_id]) // support identifying new Collections
+  @@index([raw_account_id]) // support identifying new accounts
 }

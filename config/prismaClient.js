@@ -11,6 +11,31 @@
  */
 
 const { PrismaClient } = require("@prisma/client");
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  log: [
+    {
+      emit: "event",
+      level: "query", // Log queries
+    },
+    {
+      emit: "stdout",
+      level: "info", // Log general information
+    },
+    {
+      emit: "stdout",
+      level: "warn", // Log warnings
+    },
+    {
+      emit: "stdout",
+      level: "error", // Log errors
+    },
+  ],
+});
+
+// prisma.$on("query", (event) => {
+//   console.log(`Query: ${event.query}`);
+//   // console.log(`Params: ${event.params}`);
+//   console.log(`Duration: ${event.duration}ms`);
+// });
 
 module.exports = prisma;
