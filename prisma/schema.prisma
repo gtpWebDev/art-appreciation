@@ -24,9 +24,10 @@ model User {
 
 // TzAccountOwner is the person behind one or more TzAccounts
 model TzAccountOwner {
-  id         Int         @id @default(autoincrement())
-  address    String      @unique
-  tz_account TzAccount[]
+  id             Int         @id @default(autoincrement())
+  parent_address String      @unique
+  first_seen     DateTime
+  tz_account     TzAccount[]
 }
 
 // TzAccount is the unique account through which all transactions are applied on the Tezos blockchain
@@ -44,22 +45,20 @@ model TzAccount {
 }
 
 // Collection is an art project consisting of 1 or many Nfts
-// fx_collection_id used as primary key as well controlled int
+// fx_collection_id is used directly as the primary key
 model Collection {
   id  Int   @id @unique
   nft Nft[]
 }
 
 // Nft is an individual piece of generative art
+// fx_nft_id is used directly as the primary key
 model Nft {
-  id            Int        @id @default(autoincrement())
-  fx_nft_id     String     @unique
+  id            String     @id // not auto, received from process
   collection    Collection @relation(fields: [collection_id], references: [id])
   collection_id Int
   Purchase      Purchase[]
   Listing       Listing[]
-
-  @@index([fx_nft_id]) // support identifying new Nfts
 }
 
 // Purchases consist of Primary (from artist) or Secondary (from owners)
@@ -67,12 +66,14 @@ model Purchase {
   id         Int       @id @default(autoincrement())
   is_primary Boolean
   nft        Nft       @relation(fields: [nft_id], references: [id])
-  nft_id     Int
+  nft_id     String
   account    TzAccount @relation(fields: [account_id], references: [id])
   account_id Int
   price_tz   Decimal
   timestamp  DateTime
   score      Decimal
+
+  @@index([timestamp]) // support collecting most recent purchase
 }
 
 // Staging table. nftId and accountId are in their raw forms.
@@ -95,11 +96,13 @@ model Listing {
   id         Int       @id @default(autoincrement())
   is_listing Boolean
   nft        Nft       @relation(fields: [nft_id], references: [id])
-  nft_id     Int
+  nft_id     String
   account    TzAccount @relation(fields: [account_id], references: [id])
   account_id Int
   timestamp  DateTime
   score      Decimal
+
+  @@index([timestamp]) // support collecting most recent listing
 }
 
 // Staging table. nftId and accountId are in their raw forms.

@@ -1,26 +1,14 @@
-/* Collects all primary mints using Teztok. Defined as follows:
+/* 
 
-  FX_MINT - 2021-11-03
-  FX_COLLECT - 2021-11-11
-  FX_OFFER - 2021-11-11
-  FX_CANCEL_OFFER - 2021-11-11
+  Generating a unique NftId:
+    token_id was reset to 1 in early 2023, with the introduction of params.
 
-  FX_MINT_V2 - 2022-01-05
-  
-  FX_MINT_V3 -
-  FX_MINT_V4
-  FX_MINT_WITH_TICKET
-  
-  
-  FX_LISTING_ACCEPT
-  
-  FX_OFFER_ACCEPT_V3
-  FX_COLLECTION_OFFER_ACCEPT
-  
-  FX_LISTING
-  
-  FX_LISTING_CANCEL
+    Beta phase: fa2_address: KT1KEa8z6vWXDJrVqtMrAeDVzsvxat3kHaCE
+    Fxhash 1.0: fa2_address: KT1U6EHmNxJTkvaWJ4ThczG4FSDaHC21ssvi (April 2022)
+    Params, not Fxhash 2.0: fa2_address: KT1EfsNuqwLAWDd3o4pvfUx1CAh5GMdTrRvr (March 2023)
 
+    It is therefore necessary to generate a unique id using both fa2_address and token_id
+    
   Primary sales:
     Project launched beta, pre Jan stage. NOTE, NO LONGER MINTABLE, ALL UNMINTED WERE BURNT IN JAN-22
       events(type: {_eq: "FX_MINT"}}) {
@@ -91,6 +79,53 @@ async function collateQueryResults(teztokFn, limit, ...params) {
   }
 }
 
+// not used now
+// async function teztok_FxhashActivityOnDate(limit, offset, dateString) {
+//   const queryString = `
+//       query MyQuery {
+//         events(
+//           where: {
+//             _or: [
+//               { type: { _eq: "FX_MINT_WITH_TICKET" } }
+//               { type: { _eq: "FX_MINT_V4" } }
+//               { type: { _eq: "FX_MINT_V3" } }
+//               { type: { _eq: "FX_MINT_V2" } }
+//               { type: { _eq: "FX_MINT" } }
+//               { type: { _eq: "FX_LISTING_ACCEPT" } }
+//               { type: { _eq: "FX_COLLECT" } }
+//               { type: { _eq: "FX_OFFER_ACCEPT_V3" } }
+//               { type: { _eq: "FX_COLLECTION_OFFER_ACCEPT" } }
+//               { type: { _eq: "FX_OFFER" } }
+//               { type: { _eq: "FX_LISTING" } }
+//               { type: { _eq: "FX_CANCEL_OFFER" } }
+//               { type: { _eq: "FX_LISTING_CANCEL" } }
+//             ]
+//             _and: [
+//               { timestamp: { _gte: "${dateString}T00:00:00" } }
+//               { timestamp: { _lte: "${dateString}T23:59:59" } }
+//             ]
+//           }
+//           limit: ${limit}
+//           offset: ${offset}
+//         ) {
+//           type
+//           timestamp
+//           token {
+//             fa2_address
+//             token_id
+//             fx_issuer_id
+//           }
+//           price
+//           buyer_address
+//           seller_address
+//         }
+//       }
+//     `;
+
+//   const response = await teztokEventRequest(queryString);
+//   return response;
+// }
+
 /**
  * Collect relevant fxhash activity for a calendar day from teztok API
  * @param {number} limit
@@ -98,7 +133,7 @@ async function collateQueryResults(teztokFn, limit, ...params) {
  * @param {string} dateString
  * @returns {{success:boolean, error: Error, data: object}}
  */
-async function teztok_FxhashActivityOnDate(limit, offset, dateString) {
+async function teztok_FxhashActivityFromTimestamp(timestamp, limit) {
   const queryString = `
       query MyQuery {
         events(
@@ -119,22 +154,23 @@ async function teztok_FxhashActivityOnDate(limit, offset, dateString) {
               { type: { _eq: "FX_LISTING_CANCEL" } }
             ]
             _and: [
-              { timestamp: { _gte: "${dateString}T00:00:00" } }
-              { timestamp: { _lte: "${dateString}T23:59:59" } }
+              { timestamp: { _gte: "${timestamp}" } }
             ]
           }
           limit: ${limit}
-          offset: ${offset}
+          order_by: {timestamp: asc}
         ) {
           type
           timestamp
           token {
+            fa2_address
             token_id
             fx_issuer_id
           }
           price
           buyer_address
           seller_address
+          ophash
         }
       }
     `;
@@ -145,5 +181,5 @@ async function teztok_FxhashActivityOnDate(limit, offset, dateString) {
 
 module.exports = {
   collateQueryResults,
-  teztok_FxhashActivityOnDate,
+  teztok_FxhashActivityFromTimestamp,
 };
