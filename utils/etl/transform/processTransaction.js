@@ -10,76 +10,62 @@ const { TRANSACTION_TYPES } = require("../../../constants/fxhashConstants");
 
 const processTransaction = (transaction) => {
   try {
-    // if (transaction.token.fx_issuer_id === null) {
-    //   throw new Error("No colelction id");
-    // }
-
-    let transData = {};
     let transType = "";
-    let isPrimary = false;
-    let isListing = false;
-    let isPurchase = false;
 
     switch (transaction.type) {
-      //purchases
       case "FX_MINT_WITH_TICKET":
       case "FX_MINT_V4":
       case "FX_MINT_V3":
       case "FX_MINT_V2":
       case "FX_MINT":
-        isPrimary = true;
+        transType = TRANSACTION_TYPES.PRIMARY_PURCHASE;
+        break;
       case "FX_LISTING_ACCEPT":
       case "FX_COLLECT":
       case "FX_OFFER_ACCEPT_V3":
       case "FX_COLLECTION_OFFER_ACCEPT":
-        isPurchase = true; // isPrimary remains false
+        transType = TRANSACTION_TYPES.SECONDARY_PURCHASE;
         break;
-      // end of purchases
-
-      // listings
       case "FX_OFFER":
       case "FX_LISTING":
-        isListing = true; // isPurchase remains false
+        transType = TRANSACTION_TYPES.LISTING;
+        break;
       case "FX_CANCEL_OFFER":
       case "FX_LISTING_CANCEL":
-        // isListing and isPurchase remains false
+        transType = TRANSACTION_TYPES.DELISTING;
         break;
-      // end of listings
     }
 
-    if (isPurchase) {
-      transData = {
-        is_primary: isPrimary,
-        raw_account_id: transaction.buyer_address,
-        price_tz: transaction.price,
-        // update score when have final score function
-        // score: transaction.price, // score approach tuned to give price at purchase
-      };
+    // note for collection_id below, assign dummy collection id if not available
+    // nft is assigned collection_id the first time it is seen
+    // impacts collection_id analysis only
+    // will not cause any fundamental data integrity issues
+    let transData = {
+      transaction_type: transType,
+      timestamp: transaction.timestamp,
+      collection_id: transaction.token.fx_issuer_id ?? 999999, // nullish coalescing operator, only refuses null or undefined!
+    };
+
+    // account_id - buyer for purchases, seller for listings
+    if (
+      transType === TRANSACTION_TYPES.PRIMARY_PURCHASE ||
+      transType == TRANSACTION_TYPES.SECONDARY_PURCHASE
+    ) {
+      transData.raw_account_id = transaction.buyer_address;
+      transData.price_tz = transaction.price;
     } else {
-      transData = {
-        is_listing: isListing,
-        raw_account_id: transaction.seller_address,
-      };
+      transData.raw_account_id = transaction.seller_address;
+      transData.price_tz = null;
     }
 
     transData.fx_nft_id = generateUniqueNftId(
       transaction.token.fa2_address,
       transaction.token.token_id
     );
-    // assign dummy collection id if not available
-    // nft is assigned collection_id the first time it is seen
-    // impacts collection_id analysis only
-    // will not cause any fundamental data integrity issues
-    transData.collection_id = transaction.token.fx_issuer_id || 999999;
 
-    transData.timestamp = transaction.timestamp;
-    transType = isPurchase
-      ? TRANSACTION_TYPES.PURCHASE
-      : TRANSACTION_TYPES.LISTING;
-
-    return { success: true, transData, transType };
+    return { success: true, transData };
   } catch (error) {
-    return { success: false, transData: null, transType: null };
+    return { success: false, transData: null };
   }
 };
 
@@ -93,7 +79,7 @@ const generateUniqueNftId = (fa2Address, tokenId) => {
    * - Params, not Fxhash 2.0: fa2_address: KT1EfsNuqwLAWDd3o4pvfUx1CAh5GMdTrRvr (March 2023)
    */
 
-  // UNTESTED
+  // UNTESTED BUT OUTPUTS SENSIBLE
 
   const uniqueNftId = fa2Address.slice(-5) + "_" + tokenId;
   return uniqueNftId;

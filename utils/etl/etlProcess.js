@@ -12,10 +12,12 @@ const processTransaction = require("./transform/processTransaction");
 const loadNewPurchases = require("./load/loadPurchases");
 const loadNewListings = require("./load/loadListings");
 
+const loadStage = require("./load/loadStage");
+
 //poss temporary
 const prisma = require("../../config/prismaClient");
 
-const earliestTimestamp = "2021-11-10T00:00:00"; // before first fxhash transaction
+const earliestTimestamp = "2021-11-03T00:00:00"; // before first fxhash transaction
 
 /**
  * EXTRACT-TRANSFORM-LOAD APPROACH
@@ -54,7 +56,7 @@ const earliestTimestamp = "2021-11-10T00:00:00"; // before first fxhash transact
 
 // run parameters during dev
 const testMode = true;
-let endAfter = "2022-11-21T16:00:00";
+let endAfter = "2024-11-21T16:00:00";
 const batchSize = 2000;
 
 async function etlProcess() {
@@ -71,8 +73,7 @@ async function etlProcess() {
   }
 
   // dev only, tracking number of transactions removed due to no primary purchase existing
-  let purchasesRemoved = 0;
-  let listingsRemoved = 0;
+  let transactionsRemoved = 0;
 
   /** Batches defined by total number of transactions with transactions from
    *  latest timestamp in batch removed, so can start next batch from that
@@ -100,16 +101,14 @@ async function etlProcess() {
       `Processing batch of ${amendedBatch.length} from ${batchTimestamp} to ${mostRecentTimestamp}`
     );
 
-    const { newPurchasesRemoved, newListingsRemoved } = await processBatch(
-      amendedBatch
+    const { newTransactionsRemoved, batchFullyProcessed } = await processBatch(
+      amendedBatch,
+      mostRecentTimestamp
     );
 
-    purchasesRemoved += newPurchasesRemoved;
-    listingsRemoved += newListingsRemoved;
+    transactionsRemoved += newTransactionsRemoved;
 
-    console.log(
-      `Running total - purchases removed: ${purchasesRemoved}, listings removed: ${listingsRemoved}`
-    );
+    console.log(`Running total - transactions removed: ${transactionsRemoved}`);
 
     // update details for next batch
     batchTimestamp = mostRecentTimestamp;
@@ -134,62 +133,27 @@ function removeLatestTransactions(provBatch) {
   };
 }
 
-async function processBatch(batch) {
-  let purchases = [];
-  let listings = [];
+async function processBatch(batch, mostRecentTimestamp) {
+  // Run through batch, transforming data into form required by staging table
 
-  // Run through batch, generating purchases and listings arrays
+  let transformedTransactions = [];
+
   batch.forEach((transaction) => {
     const transOutput = processTransaction(transaction);
-
-    if (transOutput.success) {
-      // ignore if not porcessable - missing collection id
-
-      if (transaction.collection_id === null) {
-        console.log("transaction", transaction);
-      }
-
-      if (transOutput.transType === TRANSACTION_TYPES.PURCHASE) {
-        purchases.push(transOutput.transData);
-      }
-      if (transOutput.transType === TRANSACTION_TYPES.LISTING) {
-        listings.push(transOutput.transData);
-      }
-    }
+    if (!transOutput.success) throw new Error("processTransaction failed");
+    transformedTransactions.push(transOutput.transData);
   });
 
-  /**
-   * ATOMICITY - consider a prisma transaction function after addition of
-   * new collections, Nfts and accounts, where addition of purchases and listings
-   * are carried out together - all or not at all
-   *
-   * Also consider calculating scores at this stage within transaction
-   */
-
-  /**
-   * Remodel:
-   * 1.
-   */
-
-  // Purchases and listings load stages
-  let newPurchasesRemoved = 0;
-  let newListingsRemoved = 0;
-  if (purchases.length > 0) {
-    newPurchasesRemoved = await loadNewPurchases(purchases);
-  }
-  if (listings.length > 0) {
-    newListingsRemoved = await loadNewListings(listings);
-  }
-
-  return { newPurchasesRemoved, newListingsRemoved };
-
-  // Calculate scores for new Purchases and Listings here?
+  const { batchFullyProcessed, newTransactionsRemoved } = await loadStage(
+    transformedTransactions,
+    mostRecentTimestamp
+  );
+  return { batchFullyProcessed, newTransactionsRemoved };
 }
 
 async function clearTables() {
   // apply with care, resets to an empty database!
-  await prisma.$executeRaw`TRUNCATE TABLE "PurchaseStaging";`;
-  await prisma.$executeRaw`TRUNCATE TABLE "ListingStaging";`;
+  await prisma.$executeRaw`TRUNCATE TABLE "TransactionStaging";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Purchase";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Listing";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Nft" CASCADE;`;

@@ -22,23 +22,31 @@
 
 const calcAAIScore = (
   relevantPurchPrice,
-  purchaseTimestamp,
-  transTimestamp,
+  relevantPurchaseTimestamp,
+  currentTransTimestamp,
   isGood
 ) => {
+  // DO THIS MUCH BETTER
+
+  // no previous purchase = primary purchase = max score
+  if (relevantPurchaseTimestamp === null) {
+    return 100;
+  }
+
   const goodBad = isGood ? 1 : -1;
 
   // timeDecay reduces from 1 to 0 over a year then, then stops at 0
 
   const secondsInYear = 60 * 60 * 24 * 365;
   const secondsSincePurchase =
-    genUnixTimestamp(transTimestamp) - genUnixTimestamp(purchaseTimestamp);
+    genUnixTimestamp(currentTransTimestamp) -
+    genUnixTimestamp(relevantPurchaseTimestamp);
   const timeDecay = Math.max(
     0,
     (secondsInYear - secondsSincePurchase) / secondsInYear
   );
   // console.log(
-  //   `Trans timestamp ${transTimestamp} and, purchase timestamp ${purchaseTimestamp} give time decay of ${timeDecay}`
+  //   `Trans timestamp ${currentTransTimestamp} and, purchase timestamp ${purchaseTimestamp} give time decay of ${timeDecay}`
   // );
 
   const finalScore = goodBad * relevantPurchPrice * timeDecay;

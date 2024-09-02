@@ -63,58 +63,60 @@ model Nft {
 
 // Purchases consist of Primary (from artist) or Secondary (from owners)
 model Purchase {
-  id         Int       @id @default(autoincrement())
-  is_primary Boolean
-  nft        Nft       @relation(fields: [nft_id], references: [id])
-  nft_id     String
-  account    TzAccount @relation(fields: [account_id], references: [id])
-  account_id Int
-  price_tz   Decimal
-  timestamp  DateTime
-  score      Decimal
+  id               Int       @id @default(autoincrement())
+  transaction_type String
+  nft              Nft       @relation(fields: [nft_id], references: [id])
+  nft_id           String
+  account          TzAccount @relation(fields: [account_id], references: [id])
+  account_id       Int
+  price_tz         Decimal
+  timestamp        DateTime
+  score            Decimal
 
-  @@index([timestamp]) // support collecting most recent purchase
+  @@index([timestamp])
+  @@index([nft_id])
+  @@index([transaction_type])
 }
 
-// Staging table. nftId and accountId are in their raw forms.
-model PurchaseStaging {
-  id             Int      @id @default(autoincrement())
-  is_primary     Boolean
-  fx_nft_id      String
-  collection_id  Int
-  raw_account_id String
-  price_tz       Decimal
-  timestamp      DateTime
+// Staging table. collection id, nft id and accountId are in their raw forms
+model TransactionStaging {
+  id               Int      @id @default(autoincrement())
+  transaction_type String
+  fx_nft_id        String
+  collection_id    Int
+  raw_account_id   String
+  price_tz         Decimal? // Only necessary for purchases
+  timestamp        DateTime
 
-  @@index([fx_nft_id]) // support identifying new Nfts
-  @@index([collection_id]) // support identifying new Collections
-  @@index([raw_account_id]) // support identifying new accounts
+  @@index([fx_nft_id])
+  @@index([collection_id])
+  @@index([raw_account_id])
+  @@index([timestamp])
+}
+
+// Staging table. collection id, nft id and accountId are in their raw forms
+model TransactionStagingTemp {
+  unique_id       Int @id @default(autoincrement())
+  id                             Int      
+  transaction_type               String
+  nft_id                         String
+  account_id                     Int
+  price_tz                       Decimal? // Only necessary for purchases
+  timestamp                      DateTime
+  most_recent_purchase_timestamp DateTime
+  most_recent_purchase_price_tz  Decimal?
 }
 
 // Listings consist of listings and delistings
 model Listing {
-  id         Int       @id @default(autoincrement())
-  is_listing Boolean
-  nft        Nft       @relation(fields: [nft_id], references: [id])
-  nft_id     String
-  account    TzAccount @relation(fields: [account_id], references: [id])
-  account_id Int
-  timestamp  DateTime
-  score      Decimal
+  id               Int       @id @default(autoincrement())
+  transaction_type String
+  nft              Nft       @relation(fields: [nft_id], references: [id])
+  nft_id           String
+  account          TzAccount @relation(fields: [account_id], references: [id])
+  account_id       Int
+  timestamp        DateTime
+  score            Decimal
 
   @@index([timestamp]) // support collecting most recent listing
-}
-
-// Staging table. nftId and accountId are in their raw forms.
-model ListingStaging {
-  id             Int      @id @default(autoincrement())
-  is_listing     Boolean
-  fx_nft_id      String
-  collection_id  Int
-  raw_account_id String
-  timestamp      DateTime
-
-  @@index([fx_nft_id]) // support identifying new Nfts
-  @@index([collection_id]) // support identifying new Collections
-  @@index([raw_account_id]) // support identifying new accounts
 }
