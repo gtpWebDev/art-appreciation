@@ -1,4 +1,5 @@
 const calcAAIScore = require("./aaiScore");
+const { extractMonthAndYear } = require("../../dateFunctions");
 
 const { TRANSACTION_TYPES } = require("../../../constants/fxhashConstants");
 
@@ -40,24 +41,47 @@ const processTransaction = (transaction) => {
     // nft is assigned collection_id the first time it is seen
     // impacts collection_id analysis only
     // will not cause any fundamental data integrity issues
+
     let transData = {
       transaction_type: transType,
       timestamp: transaction.timestamp,
       collection_id: transaction.token.fx_issuer_id ?? 999999, // nullish coalescing operator, only refuses null or undefined!
+      collection_iteration: transaction.token.fx_iteration ?? 999999, // can be missing, replace with dummy alternative
+      collection_name:
+        transaction.token.fx_collection_name ?? "No collection name",
+      collection_editions: transaction.token.fx_collection_editions ?? 0, // can be missing, not essential
+      collection_thumbnail: transaction.token.fx_collection_thumbnail_uri ?? "",
+      nft_thumbnail: transaction.token.thumbnail_uri ?? "",
+      artist_address: transaction.artist_address ?? "",
     };
 
-    // account_id - buyer for purchases, seller for listings
+    // artist_profile may not exist for alias
+    transData.artist_alias = transaction.artist_profile
+      ? transaction.artist_profile.alias ?? "No artist alias"
+      : "No artist alias";
+
+    // the scoring account_id is the buyer for purchases, seller for listings
     if (
       transType === TRANSACTION_TYPES.PRIMARY_PURCHASE ||
       transType == TRANSACTION_TYPES.SECONDARY_PURCHASE
     ) {
       transData.raw_account_id = transaction.buyer_address;
-      transData.price_tz = transaction.price;
+      transData.price_tz = transaction.price / 1000000; // received price is mutez
     } else {
       transData.raw_account_id = transaction.seller_address;
       transData.price_tz = null;
     }
 
+    // create nft_mint_month and nft_mint_year for primary purchases
+    // will be used for time based analysis
+    const { year, month } =
+      transData.transaction_type === TRANSACTION_TYPES.PRIMARY_PURCHASE
+        ? extractMonthAndYear(transData.timestamp)
+        : { year: null, month: null };
+    transData.nft_mint_year = year;
+    transData.nft_mint_month = month;
+
+    // creates required unique id, form "dfsfd_1"
     transData.fx_nft_id = generateUniqueNftId(
       transaction.token.fa2_address,
       transaction.token.token_id
@@ -65,6 +89,7 @@ const processTransaction = (transaction) => {
 
     return { success: true, transData };
   } catch (error) {
+    console.log(error);
     return { success: false, transData: null };
   }
 };

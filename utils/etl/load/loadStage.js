@@ -3,46 +3,54 @@
  */
 
 const prisma = require("../../../config/prismaClient");
-
 const calcAAIScore = require("../transform/aaiScore");
-
 const { TRANSACTION_TYPES } = require("../../../constants/fxhashConstants");
 
-const loadStage = async (transactions, mostRecentTimestamp) => {
+const loadStage = async (transactions) => {
   let batchFullyProcessed = false;
 
-  // console.log("loadStage transactions", transactions);
-
-  // Stage 0: Load transactions into TransactionStaging table
+  // Stage 1: Load transactions into TransactionStaging table, and add usd prices
   await truncateTransactionStagingTable();
   await addTransactionsToStaging(transactions);
+  await addUsdPrices();
 
-  // Load new owners/accounts/collections/Nfts
-  // Fully repeatable stage should batch process fail after
-  const { newTzAccountOwners, newTzAccounts, newCollections, newNfts } =
-    await addNewElements();
+  /**
+   * Stage 2: Where owners, accounts, artists, collections, NFTs are seen for
+   * the first time in the TransactionStaging table, add them to the database.
+   *
+   * Note, any repeat of this process for the same transactions will do no harm
+   * as it will just identify no new elements.
+   */
+
+  const {
+    newTzAccountOwners,
+    newTzAccounts,
+    newCollections,
+    newNfts,
+    newArtists,
+  } = await addNewElements();
 
   console.log(
-    `Added TzAccountOwners: ${newTzAccountOwners}, TzAccounts: ${newTzAccounts}, Collections: ${newCollections}, NFTs: ${newNfts}`
+    `Added TzAccountOwners: ${newTzAccountOwners}, TzAccounts: ${newTzAccounts}, Collections: ${newCollections}, NFTs: ${newNfts}, Artists: ${newArtists}`
   );
 
-  // Remove unmatched transactions from staging table
+  /**
+   * Remove transactions with NFTs that do not exist in the database.
+   * This effectively permanently ignores specific NFTs that have no
+   * identifiable primary purhcase in the teztok database.
+   */
   const newTransactionsRemoved = await removeTransactionsWithUnmatchedNfts();
 
-  console.log(
-    `Transactions with unmatched NFTs removed: ${newTransactionsRemoved}`
-  );
+  // optional stop during dev stage, delete on completion
+  await devStop();
 
-  // CHECK REMOVALS - SEEMS HIGH
-
-  // From this point, repeat of process would cause duplicates
-  // prisma transaction and message back to batch control will ensure
-  // process isn't repeatable for the same data
-
-  // PROCESS NOT TRUSTED OR REFINED AFTER THIS POINT
-
-  const { newPurchaseCount, newListingCount } =
-    await calcScoresAndAddTransactions(mostRecentTimestamp);
+  /**
+   * Stage 3: Add the transactions to the database.
+   *
+   * Note, this stage should not be repeated for the same transactions,
+   * so changes are carried out as a postgres transaction.
+   */
+  const { newPurchaseCount, newListingCount } = await addTransactionsToDb();
 
   console.log(
     `Added Purchases: ${newPurchaseCount}, Added Listings: ${newListingCount}`
@@ -58,7 +66,7 @@ const truncateTransactionStagingTable = async () => {
   try {
     await prisma.$executeRaw`TRUNCATE TABLE "TransactionStaging";`;
   } catch (error) {
-    console.error("Error truncating table:", error);
+    throw new Error("ERROR IN TRUNCATETRANSACTIONSTAGINGTABLE. INVESTIGATE");
   }
 };
 
@@ -68,18 +76,39 @@ const addTransactionsToStaging = async (transactions) => {
       data: transactions,
     });
   } catch (error) {
-    console.error("Error moving transactions to staging table", error);
+    throw new Error("ERROR IN ADDTRANSACTIONSTOSTAGING. INVESTIGATE");
+  }
+};
+
+const addUsdPrices = async () => {
+  try {
+    await prisma.$executeRaw`
+      update "TransactionStaging" ts
+      set price_usd = ts.price_tz * tcr.rate
+      from "TezosCurrencyRate" tcr
+      where cast(ts.timestamp as DATE) = tcr.date;
+    `;
+  } catch (error) {
+    throw new Error("ERROR IN addUsdPrices. INVESTIGATE");
   }
 };
 
 const addNewElements = async () => {
   const { newTzAccountOwners, newTzAccounts } = await addNewOwnersAndAccounts();
 
+  const newArtists = await addNewArtists();
+
   const newCollections = await addNewCollections();
 
   const newNfts = await addNewNfts();
 
-  return { newTzAccountOwners, newTzAccounts, newCollections, newNfts };
+  return {
+    newTzAccountOwners,
+    newTzAccounts,
+    newCollections,
+    newNfts,
+    newArtists,
+  };
 };
 
 const addNewOwnersAndAccounts = async () => {
@@ -139,26 +168,46 @@ const addNewOwnersAndAccounts = async () => {
     };
   } catch (error) {
     console.error(error);
+    throw new Error("ERROR IN ADDNEWOWNERSANDARTISTS. INVESTIGATE");
+  }
+};
+
+const addNewArtists = async () => {
+  try {
+    // note this approach assumes multiple aliases can't exist for an address
+    // (otherwise would have to use group by)
+    const newArtists = await prisma.$executeRaw`
+      INSERT INTO "Artist" (address, alias)
+      SELECT DISTINCT ts.artist_address, ts.artist_alias
+      FROM "TransactionStaging" ts
+      LEFT JOIN "Artist" art ON ts.artist_address = art.address
+      WHERE art.address IS null
+      AND ts.transaction_type = ${TRANSACTION_TYPES.PRIMARY_PURCHASE}
+      ON CONFLICT (id) DO NOTHING; -- for artists some data can't be trusted
+    `;
+    return newArtists;
+  } catch (error) {
+    console.error(error);
+    throw new Error("ERROR IN ADDNEWARTISTS. INVESTIGATE");
   }
 };
 
 const addNewCollections = async () => {
   try {
     const newCollections = await prisma.$executeRaw`
-      INSERT INTO "Collection" (id)
-      SELECT ts.collection_id
+      INSERT INTO "Collection" (artist_id, id, name, editions, thumbnail)
+      SELECT distinct art.id, ts.collection_id, ts.collection_name, ts.collection_editions as collection_editions, ts.collection_thumbnail
       FROM "TransactionStaging" ts
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM "Collection" coll
-        WHERE coll.id = ts.collection_id
-      )
-      ON CONFLICT (id) DO NOTHING;
+      INNER JOIN "Artist" art on ts.artist_address = art.address -- artist will exist in both
+      LEFT JOIN "Collection" coll ON ts.collection_id = coll.id -- left join, looking for no collection in coll
+      WHERE coll.id IS null
+      AND ts.transaction_type = ${TRANSACTION_TYPES.PRIMARY_PURCHASE}
+      ON CONFLICT (id) DO NOTHING; -- for artists some data can't be trusted
     `;
-
     return newCollections;
   } catch (error) {
     console.error(error);
+    throw new Error("ERROR IN ADDNEWCOLLECTIONS. INVESTIGATE");
   }
 };
 
@@ -166,15 +215,15 @@ const addNewNfts = async () => {
   /**
    * Only new NFTs in primary purchases are added.
    * NFTs with no primary purchase are never added to the database
-   * They would create bad results
-   * But their omission simply leads to a small number of NFTs not being
-   * considered.
+   * as they would create AAI scores that don't make any sense
+   * NFT omission leads to a small number of NFTs not being considered,
+   * which is an acceptable loss (c.1000 of multiple million transactions ).
    */
 
   try {
     const newNfts = await prisma.$executeRaw`
-      INSERT INTO "Nft" (id, collection_id)
-      SELECT ts.fx_nft_id, ts.collection_id
+      INSERT INTO "Nft" (id, mint_year, mint_month, thumbnail, collection_id, collection_iteration)
+      SELECT ts.fx_nft_id, ts.nft_mint_year, ts.nft_mint_month, ts.nft_thumbnail, ts.collection_id, ts.collection_iteration
       FROM "TransactionStaging" ts
       WHERE NOT EXISTS (
         SELECT 1
@@ -182,20 +231,24 @@ const addNewNfts = async () => {
         WHERE nft.id = ts.fx_nft_id
       )
       AND ts.transaction_type = ${TRANSACTION_TYPES.PRIMARY_PURCHASE}
-      ON CONFLICT (id) DO NOTHING;
+      ON CONFLICT (id) DO NOTHING; -- for artists some data can't be trusted
     `;
-    return newNfts; // new nft count
+    return newNfts; // returns count
   } catch (error) {
     console.error(error);
+    throw new Error("ERROR IN ADDNEWNFTS. INVESTIGATE");
   }
 };
 
 const removeTransactionsWithUnmatchedNfts = async () => {
   try {
-    // Remove any transactions with no matching Nft
-    // (All NFTs in this batch will have been added)
-    // These are transactions where no primary transaction exists in the
-    // teztok data, and hence can't be used for the analysis
+    /**
+     * Removes any transactions for NFTs that do not exist in the database.
+     * This should only be called after new NFTs have been added.
+     *
+     * In practice, this happens when no primary purchase transaction exists
+     * in the teztok database (caused by early batch mint transactions).
+     */
 
     const transactionsRemoved = await prisma.$executeRaw`
       DELETE FROM "TransactionStaging" ts
@@ -208,126 +261,147 @@ const removeTransactionsWithUnmatchedNfts = async () => {
     return transactionsRemoved;
   } catch (error) {
     console.error(error);
+    throw new Error(
+      "ERROR IN REMOVETRANSACTIONSWITHUNMATCHEDNFTS. INVESTIGATE"
+    );
   }
 };
 
-const calcScoresAndAddTransactions = async (mostRecentTimestamp) => {
+const devStop = async () => {
+  /**
+   * Adding in timestamp stop criteria for dev only, delete for prod
+   * Get first timestamp in TransactionStaging table
+   */
+  // const missingAccounts = await prisma.$queryRaw`
+  //   select * from "TransactionStaging" ts
+  //   order by "timestamp" desc
+  //   limit 1;
+  // `;
+  // console.log("CHECK", missingAccounts[0].timestamp);
+  // const compareDate = new Date("2021-11-12T13:40:00.000Z");
+  // if (missingAccounts[0].timestamp > compareDate) {
+  //   throw new Error("Planned stop before processing transactions");
+  // }
+};
+
+const addTransactionsToDb = async () => {
   /**
    * Principle is to ensure that scores are always calculated before transactions
-   * are added (and that scores for a transaction will never change).
-   * Score calculation is tricky due to need to compare with the most recent
-   * transaction for that Nft.
-   * Process is made more complicated by the most recent purchase often being in
-   * the staging table itself. Stages are:
-   * Stage 1a - process transactions with an earlier purchase in the staging
-   *            table, storing details in an array
-   * Stage 1b - remove these transactions from staging table
-   * Stage 2a - process transactions with an earlier purchase in the database,
-   *            adding them to the array
-   * Stage 2b - remove these transactions from staging table
-   * Stage 3a - process primary purchases, storing details in an array
-   * Stage 4  - check have all transactions
-   * Stage 5  - calculate scores for all transactions
-   * Stage 6  - add them to the Purchase or Listing tables as appropriate
+   * are added, and that scores for a transaction will never change.
+   * Chosen process takes account of scoring mechanism, and the fact that
+   * the score for listings depends on the most recent purchase of the same NFT.
+   *
+   * Stage 1a - process all purchases - primary and secondary - extracting them
+   *            to an array, calculating their AAIScore, then adding them to
+   *            the database.
+   * Stage 1b - remove purchases from the staging table
+   * Stage 2 -  process all remaining transactions (listings) now that any
+   *            prior purchase must be in the database - again extract them to
+   *            an array, calculate their AAIScore, and add them to the db.
    */
 
   try {
-    let newTransactions = [];
-
-    // use to check every transaction is processed correctly
+    // log some numbers to check all transactions in staging table are considered
     const numberOfStagedTransactions = await prisma.transactionStaging.count();
     console.log(
       `Staged transactions at start of add transact phase: ${numberOfStagedTransactions}`
     );
+    let newPurchaseCount = 0;
+    let newListingCount = 0;
 
-    // Stage 1a - process transactions with an earlier purchase in the staging table, storing details in an array
+    // Stage 1a - process all purchases
 
-    const inStagingTransactions = await prisma.$queryRaw`
-      SELECT 
-        ts1.id,
-        acc.id AS account_id,
-        ts1.fx_nft_id AS nft_id,
-        ts1.timestamp,
-        ts1.price_tz,
-        -- ts2.id AS earlier_transaction_id,
-        ts2.timestamp AS most_recent_purchase_timestamp,
-        -- ts2.transaction_type as earlier_transaction_type,
-        ts2.price_tz as most_recent_purchase_price_tz
-      FROM "TransactionStaging" ts1
-      INNER JOIN "TzAccount" acc on ts1.raw_account_id  = acc.address
-      INNER JOIN LATERAL ( --seems similar to a correlated subquery
-        SELECT 
-          ts2.id,
-          ts2.timestamp,
-          -- ts2.transaction_type,
-          ts2.price_tz
-        FROM "TransactionStaging" ts2
-        WHERE ts2.fx_nft_id = ts1.fx_nft_id 
-          AND ts2.timestamp < ts1.timestamp
-          and ts2.transaction_type in ('primary_purchase','secondary_purchase')
-        ORDER BY ts2.timestamp DESC
-        LIMIT 1
-      ) ts2 ON true
-      ORDER BY ts1.fx_nft_id, ts1.timestamp;
+    /**
+     * Batch mints were possible in the very early days. Teztok does not process
+     * these correctly, giving each mint in the batch the first token_id.
+     * Therefore must ignore all but the first mint, from which point these
+     * NFTs will be omitted from the dataset permanently, given that they are
+     * inserted at primary_purchase only.
+     *
+     * Query therefore takes unique instances of timestamp, nft_id and
+     * transaction_type ('primary_purchase' or 'secondary_purchase' at this stage).
+     * Any duplicates are therefore ignored from this point.
+     */
+
+    // throw new Error("STOP TO TEST TRANSACTIONSTAGING TABLE");
+
+    const purchases = await prisma.$queryRaw`
+      SELECT DISTINCT ON (ts.timestamp, ts.fx_nft_id, ts.transaction_type)
+        ts.id, 
+        ts.transaction_type, 
+        ts.fx_nft_id AS nft_id, 
+        acc.id AS account_id, 
+        ts.price_tz, 
+        ts.price_usd,
+        ts.timestamp
+      FROM "TransactionStaging" ts
+      INNER JOIN "TzAccount" acc ON ts.raw_account_id = acc.address
+      WHERE ts.transaction_type in (${TRANSACTION_TYPES.PRIMARY_PURCHASE},${TRANSACTION_TYPES.SECONDARY_PURCHASE})
+      ORDER BY ts.timestamp, ts.fx_nft_id, ts.transaction_type, ts.timestamp;
     `;
 
-    // if (inStagingTransactions.length > 0) {
-    //   // CONSOLE DURING DEV
-    //   console.log(
-    //     "Transactions with earlier purchases in staging:",
-    //     inStagingTransactions
-    //   );
-    //   // throw new Error("TEMPORARY STOP");
-    // }
+    // create a score property and calculate scores
+    let constructedPurchases = purchases.map((transaction) => ({
+      ...transaction,
+      score: 0,
+    }));
 
-    // Stage 1b - remove these transactions from staging table
-    const inStagingRemoveArray = inStagingTransactions.map((ele) => ele.id);
+    constructedPurchases.forEach((trans) => {
+      const { normalisedScore, priceInfluencedScore } = calcAAIScore(
+        trans.price_usd, // this transaction price
+        trans.timestamp, // this transaction timestamp
+        trans.transaction_type,
+        trans.timestamp
+      );
+      trans.normalised_score = normalisedScore;
+      trans.score = priceInfluencedScore;
+    });
 
-    const removedInStagingTransactions =
-      await prisma.transactionStaging.deleteMany({
-        where: {
-          id: {
-            in: inStagingRemoveArray,
-          },
+    const newPurchaseAdds = await prisma.purchase.createMany({
+      data: constructedPurchases,
+    });
+
+    /**
+     *  Stage 1b - remove purchases from the staging table
+     *  Note, purchases array is not appropriate as it is only distinct cases.
+     *  Need to remove all purchases.
+     */
+    await prisma.transactionStaging.deleteMany({
+      where: {
+        transaction_type: {
+          in: [
+            TRANSACTION_TYPES.PRIMARY_PURCHASE,
+            TRANSACTION_TYPES.SECONDARY_PURCHASE,
+          ],
         },
-      });
+      },
+    });
 
-    const numberOfStagedTransactions2 = await prisma.transactionStaging.count();
-    console.log(
-      `InStaging transactions removed: ${removedInStagingTransactions.count}. Remaining : ${numberOfStagedTransactions2}`
-    );
+    /**
+     * Stage 2 - process all remaining transactions - listings
+     * Note, this is the heaviest db process and may be
+     * If it becomes unmanageable, plan B is to add the latest purchase
+     * details in the nft table to reference it as required.
+     */
 
-    // store ready for processing
-    const constructedInStagingTransactions = inStagingTransactions.map(
-      (trans) => ({ ...trans, score: 0 })
-    );
-    newTransactions = constructedInStagingTransactions;
-
-    // Stage 2a - process transactions with an earlier purchase in the database, adding them to the array
-
-    // TO CHECK
-    // AND ASSUME COMPUTATIONALLY TOO COMPLEX
-
-    const inDbTransactions = await prisma.$queryRaw`
+    const listings = await prisma.$queryRaw`
       SELECT 
         ts.id,
         acc.id AS account_id,
         ts.fx_nft_id as nft_id,
         ts.transaction_type,
         ts.timestamp,
-        ts.price_tz,
-        -- p.id AS earlier_transaction_id,
+        -- ts.price_tz,
+        ts.price_usd,
         p.timestamp AS most_recent_purchase_timestamp,
-        -- p.transaction_type as earlier_transaction_type,
-        p.price_tz as most_recent_purchase_price_tz
+        p.price_usd as most_recent_purchase_price_usd
       FROM "TransactionStaging" ts
       INNER JOIN "TzAccount" acc on ts.raw_account_id  = acc.address
-      INNER JOIN LATERAL ( --seems similar to a correlated subquery
+      INNER JOIN LATERAL ( -- similar to a correlated subquery
         SELECT 
           p.id,
           p.timestamp,
-          -- p.transaction_type,
-          p.price_tz
+          p.price_usd
         FROM "Purchase" p
         WHERE p.nft_id = ts.fx_nft_id 
           AND p.timestamp < ts.timestamp
@@ -338,137 +412,44 @@ const calcScoresAndAddTransactions = async (mostRecentTimestamp) => {
       ORDER BY ts.fx_nft_id, p.timestamp;
     `;
 
-    // if (inDbTransactions.length > 0) {
-    //   // CONSOLE DURING DEV
-    //   console.log(
-    //     "Transactions with earlier purchases in db:",
-    //     inDbTransactions
-    //   );
-    //   // throw new Error("STOP ON REQUIRED BATCH");
-    // }
-
-    // Stage 2b - remove these transactions from staging table
-    const inDbRemoveArray = inDbTransactions.map((ele) => ele.id);
-    const removedInDbTransactions = await prisma.transactionStaging.deleteMany({
-      where: {
-        id: {
-          in: inDbRemoveArray,
-        },
-      },
-    });
-    // console.log("removedInDbTransactions", removedInDbTransactions.count);
-    const numberOfStagedTransactions3 = await prisma.transactionStaging.count();
-    console.log(
-      `InDb transactions removed: ${removedInDbTransactions.count}. Remaining : ${numberOfStagedTransactions3}`
-    );
-
-    // store ready for processing
-    const constructedInDbTransactions = inDbTransactions.map((trans) => ({
+    // create a score property and calculate scores
+    let constructedListings = listings.map((trans) => ({
       ...trans,
       score: 0,
     }));
-    newTransactions = [...newTransactions, ...constructedInDbTransactions];
 
-    // Stage 3a - process primary purchases, storing details in an array
-
-    const primaryPurchases = await prisma.$queryRaw`
-    SELECT
-      ts.id, 
-      ts.transaction_type, 
-      ts.fx_nft_id AS nft_id, 
-      acc.id AS account_id, 
-      ts.price_tz, 
-      ts.timestamp 
-    FROM "TransactionStaging" ts
-    INNER JOIN "TzAccount" acc ON ts.raw_account_id = acc.address -- accounts will always exist
-    WHERE ts.transaction_type = ${TRANSACTION_TYPES.PRIMARY_PURCHASE};
-  `;
-
-    // construct and store details in array
-    const constructedPrimaryPurchases = primaryPurchases.map((transaction) => ({
-      ...transaction,
-      most_recent_purchase_timestamp: null,
-      most_recent_purchase_price_tz: null,
-      score: 0,
-    }));
-
-    newTransactions = [...newTransactions, ...constructedPrimaryPurchases];
-
-    // Stage 4  - check have all transactions
-
-    console.log(`Expected: ${numberOfStagedTransactions}`);
-    console.log(
-      `Constructed ${newTransactions.length} - inStaging ${inStagingTransactions.length}, inDb ${inDbTransactions.length},  primary ${constructedPrimaryPurchases.length}`
-    );
-
-    if (newTransactions.length !== numberOfStagedTransactions) {
-      console.error(
-        "NUMBER OF TRANSACTIONS READY TO SCORE DOES NOT MATCH TRANSACTIONS IN STAGING TABLE"
-      );
-      throw new Error(
-        "NUMBER OF TRANSACTIONS READY TO SCORE DOES NOT MATCH TRANSACTIONS IN STAGING TABLE"
-      );
-    }
-
-    // * Stage 5  - calculate scores for all transactions
-    newTransactions.forEach((trans) => {
-      const isGood =
-        trans.transaction_type === TRANSACTION_TYPES.LISTING ? false : true;
-      trans.score = calcAAIScore(
-        trans.most_recent_purchase_price_tz,
+    constructedListings.forEach((trans) => {
+      const { normalisedScore, priceInfluencedScore } = calcAAIScore(
+        trans.most_recent_purchase_price_usd,
         trans.most_recent_purchase_timestamp,
-        trans.timestamp,
-        isGood
+        trans.transaction_type,
+        trans.timestamp
       );
+      trans.normalised_score = normalisedScore;
+      trans.score = priceInfluencedScore;
     });
-
-    // * Stage 6  - add newTransactions array to the Purchase or Listing tables as appropriate
-    const newPurchases = newTransactions.filter(
-      (trans) =>
-        trans.transaction_type === TRANSACTION_TYPES.PRIMARY_PURCHASE ||
-        trans.transaction_type === TRANSACTION_TYPES.SECONDARY_PURCHASE
-    );
-    const newListings = newTransactions.filter(
-      (trans) =>
-        trans.transaction_type === TRANSACTION_TYPES.LISTING ||
-        trans.transaction_type === TRANSACTION_TYPES.DELISTING
-    );
 
     // remove superfluous properties
-    const finalPurchasesArray = newPurchases.map(
+    constructedListings = constructedListings.map(
       ({
-        most_recent_purchase_price_tz,
+        most_recent_purchase_price_usd,
         most_recent_purchase_timestamp,
-        ...rest
-      }) => rest
-    );
-    const finalListingsArray = newListings.map(
-      ({
-        most_recent_purchase_price_tz,
-        most_recent_purchase_timestamp,
-        price_tz,
+        price_usd,
         ...rest
       }) => rest
     );
 
-    const newPurchaseAdds = await prisma.purchase.createMany({
-      data: finalPurchasesArray,
-    });
     const newListingAdds = await prisma.listing.createMany({
-      data: finalListingsArray,
+      data: constructedListings,
     });
 
-    const newPurchaseCount = newPurchaseAdds.count;
-    const newListingCount = newListingAdds.count;
-
-    console.log("newPurchaseCount", newPurchaseCount);
-    console.log("newListingCount", newListingCount);
+    newPurchaseCount = newPurchaseAdds.count;
+    newListingCount = newListingAdds.count;
 
     return { newPurchaseCount, newListingCount };
-
-    // await calculateStagingTableScores();
   } catch (error) {
     console.error(error);
+    throw new Error("ERROR IN ADDTRANSACTIONSTODB. INVESTIGATE");
   }
 };
 

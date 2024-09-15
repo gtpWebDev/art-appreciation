@@ -50,7 +50,7 @@
 
 const teztokEventRequest = require("./teztokRequest.js");
 
-// 1508 on 2021-11-10
+const { getStartOfUTCDay } = require("../../dateFunctions.js");
 
 /**
  * Runs a function with the given parameters repeatedly until there are no more results
@@ -79,61 +79,15 @@ async function collateQueryResults(teztokFn, limit, ...params) {
   }
 }
 
-// not used now
-// async function teztok_FxhashActivityOnDate(limit, offset, dateString) {
-//   const queryString = `
-//       query MyQuery {
-//         events(
-//           where: {
-//             _or: [
-//               { type: { _eq: "FX_MINT_WITH_TICKET" } }
-//               { type: { _eq: "FX_MINT_V4" } }
-//               { type: { _eq: "FX_MINT_V3" } }
-//               { type: { _eq: "FX_MINT_V2" } }
-//               { type: { _eq: "FX_MINT" } }
-//               { type: { _eq: "FX_LISTING_ACCEPT" } }
-//               { type: { _eq: "FX_COLLECT" } }
-//               { type: { _eq: "FX_OFFER_ACCEPT_V3" } }
-//               { type: { _eq: "FX_COLLECTION_OFFER_ACCEPT" } }
-//               { type: { _eq: "FX_OFFER" } }
-//               { type: { _eq: "FX_LISTING" } }
-//               { type: { _eq: "FX_CANCEL_OFFER" } }
-//               { type: { _eq: "FX_LISTING_CANCEL" } }
-//             ]
-//             _and: [
-//               { timestamp: { _gte: "${dateString}T00:00:00" } }
-//               { timestamp: { _lte: "${dateString}T23:59:59" } }
-//             ]
-//           }
-//           limit: ${limit}
-//           offset: ${offset}
-//         ) {
-//           type
-//           timestamp
-//           token {
-//             fa2_address
-//             token_id
-//             fx_issuer_id
-//           }
-//           price
-//           buyer_address
-//           seller_address
-//         }
-//       }
-//     `;
-
-//   const response = await teztokEventRequest(queryString);
-//   return response;
-// }
-
 /**
- * Collect relevant fxhash activity for a calendar day from teztok API
+ * Collect relevant fxhash activity from teztok API, strictly after a given timestamp, and with a given batch size. Includes transactions to yesterday.
+ * @param {string} timestamp
  * @param {number} limit
- * @param {number} offset
- * @param {string} dateString
  * @returns {{success:boolean, error: Error, data: object}}
  */
-async function teztok_FxhashActivityFromTimestamp(timestamp, limit) {
+async function teztok_FxhashActivityBatch(timestamp, limit) {
+  const startOfTodayString = getStartOfUTCDay();
+
   const queryString = `
       query MyQuery {
         events(
@@ -154,7 +108,8 @@ async function teztok_FxhashActivityFromTimestamp(timestamp, limit) {
               { type: { _eq: "FX_LISTING_CANCEL" } }
             ]
             _and: [
-              { timestamp: { _gte: "${timestamp}" } }
+              { timestamp: { _gt: "${timestamp}" } }
+              { timestamp: { _lt: "${startOfTodayString}" } }
             ]
           }
           limit: ${limit}
@@ -166,11 +121,20 @@ async function teztok_FxhashActivityFromTimestamp(timestamp, limit) {
             fa2_address
             token_id
             fx_issuer_id
+            fx_iteration
+            fx_collection_editions
+            fx_collection_name
+            fx_collection_thumbnail_uri
+            thumbnail_uri
           }
           price
           buyer_address
           seller_address
           ophash
+          artist_profile {
+            alias
+          }
+          artist_address
         }
       }
     `;
@@ -181,5 +145,5 @@ async function teztok_FxhashActivityFromTimestamp(timestamp, limit) {
 
 module.exports = {
   collateQueryResults,
-  teztok_FxhashActivityFromTimestamp,
+  teztok_FxhashActivityBatch,
 };

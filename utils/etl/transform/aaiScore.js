@@ -1,56 +1,82 @@
 /**
  * Score calculation central to the application. Approach is as follows:
  *
- * "Transaction Score" = "Relevant Purchase Price" * "Raw Score"
+ * "Transaction Score" = "relevantPurchasePrice" * "baseScore" * "goodBadMultiplier"
  *
- * "Relevant Purchase Price (RPP)" is the purchase price for the Nft relevant to the
- *  account that a transaction related to.
- *  - e.g. if an account lists an nft, the RPP is the price that this account most
- *    recently paid for the NFT
+ * "relevantPurchasePrice" is the purchase price for the Nft relevant to the
+ *  account that the transaction relates to.
+ *  - if an account lists or delists an nft, the RPP is the price that this
+ *    account most recently paid for the NFT
+ *  - if the transaction is a purchase, it is simply the purchase price
  *
- * "Raw Score" for an individual transaction ranges from 1 to -1
- * where 1 represents "all good", -1 represents "all bad"
+ * "baseScore" is a decay function designed to start at 2, reducing to zero over
+ * time. To understand the desired effect of this element, it is best to look
+ * at an example (we'll assume relevantPurchasePrice 1 for simplicity):
+ * - Primary purchase - 1 * base score: 1
+ * - Listing a little later: -1 * base score: -1.99 - aggregate score: -0.99
+ * - Delisting a few days later: 1 * base score: 1.95 - aggregate score: 0.94
+ * - Listing a month later: -1 * base score: -1.75 - aggregate sccore: -0.81
  *
+ * The aggregate score alternates within 1 and -1, with 1 representing a
+ * collector always having held the nft, and -1 representing a collector having
+ * attempted to sell the nft 100% of the time. (This will be explained further
+ * in the front-end)
+ *
+ * "goodBadMultiplier" reflects whether a transaction is positive or negative in
+ *  terms of art appreciation - listings are "bad" as they represent a desire to
+ *  sell, deliists and purchases are "good"
  *
  */
 
+const { TRANSACTION_TYPES } = require("../../../constants/fxhashConstants");
+
+const { differenceInDays } = require("../../dateFunctions");
+
+const DAYS_IN_YEAR = 365; // no need to adjust for leap years!
+
 /**
- * Calculate the score for an Nft transaction that reflects
- * @param {*} score
- * @returns
+ * Calculate the AAI Score for an NFT transaction
+ * @param {number} relevantPurchasePrice  - purchase price of most recent purchase of same NFT
+ * @param {date} relevantPurchaseTimestamp - timestamp of most recent purchase of same NFT
+ * @param {string} currentTransType  - transaction type such as 'primary_purchase'
+ * @param {date} currentTransTimestamp - timestamp of current transaction
+ * @returns {number} - AAI score
  */
 
 const calcAAIScore = (
-  relevantPurchPrice,
+  relevantPurchasePrice,
   relevantPurchaseTimestamp,
-  currentTransTimestamp,
-  isGood
+  currentTransType,
+  currentTransTimestamp
 ) => {
-  // DO THIS MUCH BETTER
+  const daysSinceRelevantPurchase = differenceInDays(
+    currentTransTimestamp,
+    relevantPurchaseTimestamp
+  );
 
-  // no previous purchase = primary purchase = max score
-  if (relevantPurchaseTimestamp === null) {
-    return 100;
+  let baseScore;
+  if (
+    currentTransType === TRANSACTION_TYPES.PRIMARY_PURCHASE ||
+    currentTransType === TRANSACTION_TYPES.SECONDARY_PURCHASE
+  ) {
+    // Primary or secondary purchases starts a new purchase cycle
+    baseScore = 1;
+  } else {
+    // between -2 and 2, declining as more days pass from relevant purchase
+    const multFactor =
+      1 - daysSinceRelevantPurchase / DAYS_IN_YEAR > 0
+        ? 1 - daysSinceRelevantPurchase / DAYS_IN_YEAR
+        : 0;
+    baseScore = 2 * multFactor;
   }
 
-  const goodBad = isGood ? 1 : -1;
+  const goodBadMultiplier =
+    currentTransType === TRANSACTION_TYPES.LISTING ? -1 : 1;
 
-  // timeDecay reduces from 1 to 0 over a year then, then stops at 0
+  const normalisedScore = goodBadMultiplier * baseScore;
+  const priceInfluencedScore = normalisedScore * relevantPurchasePrice;
 
-  const secondsInYear = 60 * 60 * 24 * 365;
-  const secondsSincePurchase =
-    genUnixTimestamp(currentTransTimestamp) -
-    genUnixTimestamp(relevantPurchaseTimestamp);
-  const timeDecay = Math.max(
-    0,
-    (secondsInYear - secondsSincePurchase) / secondsInYear
-  );
-  // console.log(
-  //   `Trans timestamp ${currentTransTimestamp} and, purchase timestamp ${purchaseTimestamp} give time decay of ${timeDecay}`
-  // );
-
-  const finalScore = goodBad * relevantPurchPrice * timeDecay;
-  return finalScore;
+  return { normalisedScore, priceInfluencedScore };
 };
 
 /**
@@ -58,9 +84,9 @@ const calcAAIScore = (
  * @param {*} dateString
  * @returns {number} Unix timestamp equivalent
  */
-const genUnixTimestamp = (dateString) => {
-  const dateObject = new Date(dateString);
-  return Math.floor(dateObject.getTime() / 1000);
-};
+// const genUnixTimestamp = (dateString) => {
+//   const dateObject = new Date(dateString);
+//   return Math.floor(dateObject.getTime() / 1000);
+// };
 
 module.exports = calcAAIScore;

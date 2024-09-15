@@ -23,14 +23,18 @@ model User {
 }
 
 // TzAccountOwner is the person behind one or more TzAccounts
+// a new primary key is create
 model TzAccountOwner {
   id             Int         @id @default(autoincrement())
   parent_address String      @unique
   first_seen     DateTime
   tz_account     TzAccount[]
+
+  @@index([parent_address])
 }
 
 // TzAccount is the unique account through which all transactions are applied on the Tezos blockchain
+// a new primary key is create
 model TzAccount {
   id       Int            @id @default(autoincrement())
   address  String         @unique
@@ -42,23 +46,52 @@ model TzAccount {
   Listing  Listing[]
 
   @@index([address]) // support identifying new accounts
+  @@index([owner_id])
+}
+
+// Artist is the creator of one or more collections
+// a new primary key is created
+// have decided to not link to TzAccounts, creating this only as an analysis category
+model Artist {
+  id         Int          @id @default(autoincrement())
+  address    String       @unique
+  alias      String // I have provided 'No artist alias' is there isn't one
+  collection Collection[]
+
+  @@index([address])
+  @@index([alias]) // assist filter by alias
 }
 
 // Collection is an art project consisting of 1 or many Nfts
-// fx_collection_id is used directly as the primary key
+// fxhash collection_id is used directly as the primary key
 model Collection {
-  id  Int   @id @unique
-  nft Nft[]
+  id        Int    @id @unique
+  name      String
+  editions  Int
+  thumbnail String
+  artist    Artist @relation(fields: [artist_id], references: [id])
+  artist_id Int
+  nft       Nft[]
+
+  @@index([name]) // assist filter by name
+  @@index([artist_id])
 }
 
 // Nft is an individual piece of generative art
 // fx_nft_id is used directly as the primary key
 model Nft {
   id            String     @id // not auto, received from process
+  mint_year     Int
+  mint_month    Int
+  thumbnail     String
   collection    Collection @relation(fields: [collection_id], references: [id])
   collection_id Int
+  collection_iteration Int
   Purchase      Purchase[]
   Listing       Listing[]
+
+  @@index([mint_year, mint_month])
+  @@index([collection_id])
 }
 
 // Purchases consist of Primary (from artist) or Secondary (from owners)
@@ -70,41 +103,15 @@ model Purchase {
   account          TzAccount @relation(fields: [account_id], references: [id])
   account_id       Int
   price_tz         Decimal
+  price_usd        Decimal
   timestamp        DateTime
   score            Decimal
+  normalised_score Decimal
 
   @@index([timestamp])
   @@index([nft_id])
   @@index([transaction_type])
-}
-
-// Staging table. collection id, nft id and accountId are in their raw forms
-model TransactionStaging {
-  id               Int      @id @default(autoincrement())
-  transaction_type String
-  fx_nft_id        String
-  collection_id    Int
-  raw_account_id   String
-  price_tz         Decimal? // Only necessary for purchases
-  timestamp        DateTime
-
-  @@index([fx_nft_id])
-  @@index([collection_id])
-  @@index([raw_account_id])
-  @@index([timestamp])
-}
-
-// Staging table. collection id, nft id and accountId are in their raw forms
-model TransactionStagingTemp {
-  unique_id       Int @id @default(autoincrement())
-  id                             Int      
-  transaction_type               String
-  nft_id                         String
-  account_id                     Int
-  price_tz                       Decimal? // Only necessary for purchases
-  timestamp                      DateTime
-  most_recent_purchase_timestamp DateTime
-  most_recent_purchase_price_tz  Decimal?
+  @@index([account_id])
 }
 
 // Listings consist of listings and delistings
@@ -117,6 +124,42 @@ model Listing {
   account_id       Int
   timestamp        DateTime
   score            Decimal
+  normalised_score Decimal
 
   @@index([timestamp]) // support collecting most recent listing
+}
+
+// Staging table. collection id, nft id and accountId are in their raw forms
+model TransactionStaging {
+  id                   Int      @id @default(autoincrement())
+  transaction_type     String
+  fx_nft_id            String
+  collection_id        Int
+  collection_iteration Int
+  raw_account_id       String
+  price_tz             Decimal? // Only necessary for purchases
+  price_usd            Decimal? // Only necessary for purchases, initially null
+  timestamp            DateTime
+  artist_address       String
+  artist_alias         String
+  collection_name      String
+  collection_editions  Int
+  collection_thumbnail String
+  nft_thumbnail        String
+  nft_mint_year        Int? // only relevant to primary purchases
+  nft_mint_month       Int? // only relevant to primary purchases
+
+  @@index([fx_nft_id])
+  @@index([collection_id])
+  @@index([artist_address])
+  @@index([raw_account_id])
+  @@index([timestamp])
+}
+
+model TezosCurrencyRate {
+  id   Int      @id @default(autoincrement())
+  date DateTime @unique @db.Date // db.Date is specific to Postgres, date only, no time
+  rate Decimal
+
+  @@index([date])
 }

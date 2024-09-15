@@ -1,26 +1,39 @@
 const {
   // collateQueryResults,
-  teztok_FxhashActivityFromTimestamp,
+  teztok_FxhashActivityBatch,
 } = require("./extract/teztokQueries");
 
 const {
   FIRST_FXHASH_DAY,
+  EARLIEST_TIMESTAMP,
   TRANSACTION_TYPES,
 } = require("../../constants/fxhashConstants");
 const processTransaction = require("./transform/processTransaction");
 
-const loadNewPurchases = require("./load/loadPurchases");
-const loadNewListings = require("./load/loadListings");
+const {
+  addXDaysToDate,
+  formatDateToYYYYMMDD,
+  getStartOfYesterday,
+} = require("../dateFunctions");
 
 const loadStage = require("./load/loadStage");
 
 //poss temporary
 const prisma = require("../../config/prismaClient");
-
-const earliestTimestamp = "2021-11-03T00:00:00"; // before first fxhash transaction
+const { getExchangeRatesBetween } = require("../getExchangeRates");
 
 /**
  * EXTRACT-TRANSFORM-LOAD APPROACH
+ *
+ * OVERALL: The etlProcess function will collect data from the latest of
+ *           - a date before the very first fx hash transaction, and
+ *           - the latest transaction added to either the Purchase or Listing
+ *             tables in the database
+ *          It will continue until no data is returned for a batch, where the
+ *          request collects data until the end of yesterday - never for today
+ *          When no data is returned, it will complete.
+ *          This function is designed to be used within a job scheduler that
+ *          will run each day.
  *
  * EXTRACT:
  * - Batched into a number of transactions.
@@ -52,88 +65,200 @@ const earliestTimestamp = "2021-11-03T00:00:00"; // before first fxhash transact
  *     - Remove non-primary purchases with no matching Nft - see **REF1**
  *     - Remaining purchses added to Purchases table
  *
+ * TO DO:
+ *  - check documentation (for example here) is up to date
+ *  - check main update stage is within a transaction to avoid incomplete
+ *    part additions
+ *  - full process review to ensure behaves as I want for any kind of error
+ *  - review all procedures to being up to professional standard
+ *  - full appropriate testing of process
  */
 
 // run parameters during dev
-const testMode = true;
-let endAfter = "2024-11-21T16:00:00";
+const testMode = false;
 const batchSize = 2000;
 
 async function etlProcess() {
-  let batchTimestamp = "";
-  if (testMode) {
-    await clearTables();
-    batchTimestamp = earliestTimestamp;
-  } else {
-    // need to add appropriate error control
-    batchTimestamp = await getLatestDbTimestamp();
-    batchTimestamp = batchTimestamp.toString();
-    console.log("batchTimestamp", batchTimestamp);
-    endAfter = "2022-11-21T16:00:00";
-  }
+  if (testMode) await clearTables();
+
+  // first batch based on last db transaction, or earliest date
+  let batchTimestamp = await selectInitialBatchTimestamp();
+
+  let latestExchangeRateDate;
 
   // dev only, tracking number of transactions removed due to no primary purchase existing
   let transactionsRemoved = 0;
 
-  /** Batches defined by total number of transactions with transactions from
-   *  latest timestamp in batch removed, so can start next batch from that
-   *  timestamp
-   *
-   *  Single collection of purchases and listings, given teztok request can take a while
-   */
+  // repeated ETL process by batch
+
+  let batchData = [];
 
   do {
-    const start = Date.now();
+    const start = Date.now(); // used to measure elapsed time for batch
 
-    // receives batch: {success:boolean, error: Error, data: dataArray}
-    const provisionalBatch = await teztok_FxhashActivityFromTimestamp(
-      batchTimestamp,
-      batchSize
-    );
-    if (!provisionalBatch.success) throw new Error(provisionalBatch.error);
+    /**
+     *  Batches defined by a number of transactions with timestamp strictly
+     *  later than batchTimestamp.
+     */
+    batchData = await generateBatchData(batchTimestamp, batchSize);
 
-    const { amendedBatch, mostRecentTimestamp } = removeLatestTransactions(
-      provisionalBatch.data
-    );
+    if (batchData.length !== 0) {
+      // batch data exists, process it (no transactions returns [])
 
-    console.log("");
-    console.log(
-      `Processing batch of ${amendedBatch.length} from ${batchTimestamp} to ${mostRecentTimestamp}`
-    );
+      console.log("");
+      console.log(
+        `Batch of ${batchData.length} strictly after ${batchTimestamp}`
+      );
 
-    const { newTransactionsRemoved, batchFullyProcessed } = await processBatch(
-      amendedBatch,
-      mostRecentTimestamp
-    );
+      // update exchange rate data whenever it is not current up to yesterday
+      const startOfYesterday = getStartOfYesterday();
+      if (
+        !latestExchangeRateDate ||
+        latestExchangeRateDate < startOfYesterday
+      ) {
+        latestExchangeRateDate = await updateExchangeRateData();
+      }
 
-    transactionsRemoved += newTransactionsRemoved;
+      const { newTransactionsRemoved, batchFullyProcessed } =
+        await processBatch(batchData);
 
-    console.log(`Running total - transactions removed: ${transactionsRemoved}`);
+      // If batch completed, generate next batch timestamp, otherwise effectively repeats
+      // (batch not complete means no transactions updated)
+      if (batchFullyProcessed) {
+        batchTimestamp = await collectNextBatchTimestamp(batchData);
+      }
 
-    // update details for next batch
-    batchTimestamp = mostRecentTimestamp;
+      transactionsRemoved += newTransactionsRemoved;
+      console.log(
+        `Running total - transactions removed: ${transactionsRemoved}`
+      );
 
-    const duration = Date.now() - start;
-    console.log(`Batch took ${duration}ms`);
-  } while (!isLater(batchTimestamp, endAfter));
+      const duration = Date.now() - start;
+      console.log(`Batch complete. ${duration}ms`);
+    }
+  } while (batchData.length > 0); // continue until no data is returned
+  console.log("No more data returned. Process complete.");
 }
 
 etlProcess();
 
-function removeLatestTransactions(provBatch) {
-  const mostRecentTimestamp = provBatch[provBatch.length - 1].timestamp;
+// FUNCTIONS SUPPORTING MAIN PROCESS BELOW
 
-  const amendedBatch = provBatch.filter(
+async function selectInitialBatchTimestamp() {
+  /**
+   *  Get latest database transaction timestamp from Purchase / Listing tables
+   *  If no transactions exist, use earliestTimestamp
+   *  Returns ISO 8601 format
+   */
+
+  const latestDbTransactionDateTime = await getLatestDbTransactionDateTime();
+  const latestTransactionDateTime =
+    latestDbTransactionDateTime ?? new Date(EARLIEST_TIMESTAMP);
+
+  return latestTransactionDateTime.toISOString();
+}
+
+/**
+ * Generate batch data
+ * @param {*} batchTimestamp -
+ * @param {*} batchSize
+ * @returns {batchData: Object}
+ */
+const generateBatchData = async (batchTimestamp, batchSize) => {
+  /**
+   * Collect transactions with timestamp strictly greater than batchTimestamp
+   * Number of transactions = batchSize
+   * Then remove final timestamp transactions from within batch to use this
+   * as clean start for next batch.
+   */
+
+  const provisionalBatch = await teztok_FxhashActivityBatch(
+    batchTimestamp,
+    batchSize
+  ); // {success:boolean, error: Error, data: dataArray}
+
+  if (!provisionalBatch.success) {
+    // need to replace this with a command to attempt to continue
+    // process in X hours
+    throw new Error(provisionalBatch.error);
+  }
+
+  // remove transactions with latest timestamp
+  const provisionalBatchData = provisionalBatch.data;
+
+  const mostRecentTimestamp =
+    provisionalBatchData[provisionalBatchData.length - 1].timestamp;
+  const finalBatch = provisionalBatchData.filter(
     (ele) => ele.timestamp !== mostRecentTimestamp
   );
 
-  return {
-    amendedBatch,
-    mostRecentTimestamp,
-  };
+  return finalBatch;
+};
+
+const collectNextBatchTimestamp = async (batchData) => {
+  /**
+   * Next batch timestamp is simply the latest timestamp
+   * from the current batch.
+   */
+
+  // batch is timestamp ascending
+  return batchData[batchData.length - 1].timestamp;
+};
+
+async function getLatestExchangeRateDate() {
+  const latestExchangeRateDate = await prisma.tezosCurrencyRate.findFirst({
+    orderBy: {
+      date: "desc",
+    },
+    select: {
+      date: true,
+    },
+  });
+
+  return latestExchangeRateDate ? latestExchangeRateDate.date : null;
 }
 
-async function processBatch(batch, mostRecentTimestamp) {
+async function updateExchangeRateData() {
+  /**
+   * Task here is always to fill the gap between the latest data in the
+   * TezosCurrencyRate table, and yesterday. Specifically not collecting
+   * today's rate.
+   */
+  // Get latest date in TezosCurrencyRate table
+  let latestDbExchangeRateDate = await getLatestExchangeRateDate();
+
+  const firstMissingDbDate = addXDaysToDate(latestDbExchangeRateDate, 1);
+
+  // use latest between FIRST_FXHASH_DAY and table date
+  // Collect data for day after latest of these, up to yesterday
+  const earliestDate = new Date(FIRST_FXHASH_DAY);
+  const startDate =
+    firstMissingDbDate > earliestDate ? firstMissingDbDate : earliestDate;
+
+  const endDate = addXDaysToDate(new Date(), -1);
+
+  const startDateFormat = formatDateToYYYYMMDD(startDate);
+  const endDateFormat = formatDateToYYYYMMDD(endDate);
+
+  const exchangeRateData = await getExchangeRatesBetween(
+    startDateFormat,
+    endDateFormat
+  );
+
+  // Add any new rates to the database
+  if (exchangeRateData) {
+    await prisma.tezosCurrencyRate.createMany({
+      data: exchangeRateData,
+    });
+
+    // update new latest date
+    latestDbExchangeRateDate = await getLatestExchangeRateDate();
+  }
+
+  return latestDbExchangeRateDate;
+}
+
+async function processBatch(batch) {
   // Run through batch, transforming data into form required by staging table
 
   let transformedTransactions = [];
@@ -145,30 +270,33 @@ async function processBatch(batch, mostRecentTimestamp) {
   });
 
   const { batchFullyProcessed, newTransactionsRemoved } = await loadStage(
-    transformedTransactions,
-    mostRecentTimestamp
+    transformedTransactions
   );
   return { batchFullyProcessed, newTransactionsRemoved };
 }
 
 async function clearTables() {
   // apply with care, resets to an empty database!
+  // await prisma.$executeRaw`TRUNCATE TABLE "TezosCurrencyRate";`;
   await prisma.$executeRaw`TRUNCATE TABLE "TransactionStaging";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Purchase";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Listing";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Nft" CASCADE;`;
   await prisma.$executeRaw`TRUNCATE TABLE "Collection" CASCADE;`;
+  await prisma.$executeRaw`TRUNCATE TABLE "Artist" CASCADE;`;
   await prisma.$executeRaw`TRUNCATE TABLE "TzAccount" CASCADE;`;
   await prisma.$executeRaw`TRUNCATE TABLE "TzAccountOwner" CASCADE;`;
   console.log("Tables cleared");
+  // throw new Error();
 }
 
-async function getLatestDbTimestamp() {
-  // startTimestamp
-  // deal with no transactions, replacing with global startTimestamp
-  // currently untested as all data so far run from start
+async function getLatestDbTransactionDateTime() {
+  /**
+   * Get most recent timestamp in the transaction tables - Purchase and Listing
+   * Return the most recent of the two, in ISO 8601 form
+   */
 
-  const latestPurchaseTimestamp = await prisma.purchase.findFirst({
+  const purchaseResponse = await prisma.purchase.findFirst({
     orderBy: {
       timestamp: "desc",
     },
@@ -176,13 +304,9 @@ async function getLatestDbTimestamp() {
       timestamp: true,
     },
   });
+  const latestPurchase = purchaseResponse ? purchaseResponse.timestamp : null;
 
-  const formattedPurchaseTimestamp = latestPurchaseTimestamp.timestamp
-    .toISOString()
-    .split(".")[0];
-
-  console.log("Latest timestamp in Purchases:", formattedPurchaseTimestamp);
-  const latestListingTimestamp = await prisma.listing.findFirst({
+  const listingresponse = await prisma.listing.findFirst({
     orderBy: {
       timestamp: "desc",
     },
@@ -190,20 +314,18 @@ async function getLatestDbTimestamp() {
       timestamp: true,
     },
   });
+  const latestListing = listingresponse ? listingresponse.timestamp : null;
 
-  const formattedListingTimestamp = latestListingTimestamp.timestamp
-    .toISOString()
-    .split(".")[0];
+  return latestDate(latestPurchase, latestListing);
+}
 
-  console.log("Latest timestamp in Listings:", formattedListingTimestamp);
+function latestDate(d1, d2) {
+  if (!d1 && !d2) return null;
 
-  const date1 = new Date(formattedPurchaseTimestamp);
-  const date2 = new Date(formattedListingTimestamp);
+  if (!d1) return d2;
+  if (!d2) return d1;
 
-  const latestTimestamp =
-    date1 > date2 ? formattedPurchaseTimestamp : formattedListingTimestamp;
-
-  return latestTimestamp;
+  return d2 > d1 ? d2 : d1;
 }
 
 function isLater(timestamp, checkTimestamp) {

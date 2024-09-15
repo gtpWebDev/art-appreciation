@@ -1,4 +1,5 @@
 const FIRST_FXHASH_DAY = "2021-11-03";
+const EARLIEST_TIMESTAMP = `${FIRST_FXHASH_DAY}T00:00:00Z`;
 
 // mimics an enum
 const TRANSACTION_TYPES = Object.freeze({
@@ -14,5 +15,6 @@ const TRANSACTION_TYPES = Object.freeze({
 
 module.exports = {
   FIRST_FXHASH_DAY,
+  EARLIEST_TIMESTAMP,
   TRANSACTION_TYPES,
 };

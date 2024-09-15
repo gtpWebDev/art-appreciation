@@ -4,8 +4,14 @@ const router = express.Router();
 // this acts as a conduit for all the routes to reduce routes in app.js to one line
 
 const userRouter = require("./userRoutes");
+const nftRouter = require("./nftRoutes");
+const fxstatsRouter = require("./fxstatsRoutes");
+const transactionRouter = require("./transactionRoutes");
 
 router.use("/user", userRouter);
+router.use("/nfts", nftRouter);
+router.use("/fxstats", fxstatsRouter);
+router.use("/transactions", transactionRouter);
 
 // Test backend up and running
 router.get("/", (req, res, next) => {
