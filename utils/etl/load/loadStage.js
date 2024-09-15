@@ -302,12 +302,11 @@ const addTransactionsToDb = async () => {
 
   try {
     // log some numbers to check all transactions in staging table are considered
+    // not currently used, potentially delete
     const numberOfStagedTransactions = await prisma.transactionStaging.count();
     console.log(
       `Staged transactions at start of add transact phase: ${numberOfStagedTransactions}`
     );
-    let newPurchaseCount = 0;
-    let newListingCount = 0;
 
     // Stage 1a - process all purchases
 
@@ -357,7 +356,7 @@ const addTransactionsToDb = async () => {
       trans.score = priceInfluencedScore;
     });
 
-    const newPurchaseAdds = await prisma.purchase.createMany({
+    const newPurchaseAdds = await prisma.transaction.createMany({
       data: constructedPurchases,
     });
 
@@ -379,7 +378,7 @@ const addTransactionsToDb = async () => {
 
     /**
      * Stage 2 - process all remaining transactions - listings
-     * Note, this is the heaviest db process and may be
+     * Note, this is the heaviest db process.
      * If it becomes unmanageable, plan B is to add the latest purchase
      * details in the nft table to reference it as required.
      */
@@ -391,25 +390,25 @@ const addTransactionsToDb = async () => {
         ts.fx_nft_id as nft_id,
         ts.transaction_type,
         ts.timestamp,
-        -- ts.price_tz,
-        ts.price_usd,
-        p.timestamp AS most_recent_purchase_timestamp,
-        p.price_usd as most_recent_purchase_price_usd
+        ts.price_tz, -- will be null
+        ts.price_usd, -- will be null
+        t.timestamp AS most_recent_purchase_timestamp,
+        t.price_usd as most_recent_purchase_price_usd
       FROM "TransactionStaging" ts
       INNER JOIN "TzAccount" acc on ts.raw_account_id  = acc.address
       INNER JOIN LATERAL ( -- similar to a correlated subquery
         SELECT 
-          p.id,
-          p.timestamp,
-          p.price_usd
-        FROM "Purchase" p
-        WHERE p.nft_id = ts.fx_nft_id 
-          AND p.timestamp < ts.timestamp
-          and p.transaction_type in ('primary_purchase','secondary_purchase')
-        ORDER BY p.timestamp DESC
+          t.id,
+          t.timestamp,
+          t.price_usd
+        FROM "Transaction" t
+        WHERE t.nft_id = ts.fx_nft_id 
+          AND t.timestamp < ts.timestamp
+          AND t.transaction_type in (${TRANSACTION_TYPES.PRIMARY_PURCHASE},${TRANSACTION_TYPES.SECONDARY_PURCHASE})
+        ORDER BY t.timestamp DESC
         LIMIT 1
-      ) p ON true
-      ORDER BY ts.fx_nft_id, p.timestamp;
+      ) t ON true
+      ORDER BY ts.fx_nft_id, t.timestamp;
     `;
 
     // create a score property and calculate scores
@@ -434,17 +433,16 @@ const addTransactionsToDb = async () => {
       ({
         most_recent_purchase_price_usd,
         most_recent_purchase_timestamp,
-        price_usd,
         ...rest
       }) => rest
     );
 
-    const newListingAdds = await prisma.listing.createMany({
+    const newListingAdds = await prisma.transaction.createMany({
       data: constructedListings,
     });
 
-    newPurchaseCount = newPurchaseAdds.count;
-    newListingCount = newListingAdds.count;
+    const newPurchaseCount = newPurchaseAdds.count;
+    const newListingCount = newListingAdds.count;
 
     return { newPurchaseCount, newListingCount };
   } catch (error) {

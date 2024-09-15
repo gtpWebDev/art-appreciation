@@ -6,7 +6,6 @@ const {
 const {
   FIRST_FXHASH_DAY,
   EARLIEST_TIMESTAMP,
-  TRANSACTION_TYPES,
 } = require("../../constants/fxhashConstants");
 const processTransaction = require("./transform/processTransaction");
 
@@ -44,9 +43,7 @@ const { getExchangeRatesBetween } = require("../getExchangeRates");
  * - Some collection ids missing in data - replaced with dummy id "999999"
  *
  * TRANSFORM AND LOAD:
- * - Transactions split into Purchases (Pri and Sec) and Listings (list and delist)
- * - Purchases:
- *   - Purchase array is added to PurchaseStaging table
+ *   - transaction array is added to TransactionStaging table
  *   - Accounts and Owners:
  *     - Primary keys of both autoincrement due to large size of addresses
  *     - Transaction used to add both at same time
@@ -279,8 +276,7 @@ async function clearTables() {
   // apply with care, resets to an empty database!
   // await prisma.$executeRaw`TRUNCATE TABLE "TezosCurrencyRate";`;
   await prisma.$executeRaw`TRUNCATE TABLE "TransactionStaging";`;
-  await prisma.$executeRaw`TRUNCATE TABLE "Purchase";`;
-  await prisma.$executeRaw`TRUNCATE TABLE "Listing";`;
+  await prisma.$executeRaw`TRUNCATE TABLE "Transaction";`;
   await prisma.$executeRaw`TRUNCATE TABLE "Nft" CASCADE;`;
   await prisma.$executeRaw`TRUNCATE TABLE "Collection" CASCADE;`;
   await prisma.$executeRaw`TRUNCATE TABLE "Artist" CASCADE;`;
@@ -296,7 +292,7 @@ async function getLatestDbTransactionDateTime() {
    * Return the most recent of the two, in ISO 8601 form
    */
 
-  const purchaseResponse = await prisma.purchase.findFirst({
+  const transactionResponse = await prisma.transaction.findFirst({
     orderBy: {
       timestamp: "desc",
     },
@@ -304,21 +300,13 @@ async function getLatestDbTransactionDateTime() {
       timestamp: true,
     },
   });
-  const latestPurchase = purchaseResponse ? purchaseResponse.timestamp : null;
-
-  const listingresponse = await prisma.listing.findFirst({
-    orderBy: {
-      timestamp: "desc",
-    },
-    select: {
-      timestamp: true,
-    },
-  });
-  const latestListing = listingresponse ? listingresponse.timestamp : null;
-
-  return latestDate(latestPurchase, latestListing);
+  const latestPurchase = transactionResponse
+    ? transactionResponse.timestamp
+    : null;
+  return latestPurchase;
 }
 
+// likely not used now, delete
 function latestDate(d1, d2) {
   if (!d1 && !d2) return null;
 

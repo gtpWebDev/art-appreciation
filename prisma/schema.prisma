@@ -42,8 +42,7 @@ model TzAccount {
   owner    TzAccountOwner @relation(fields: [owner_id], references: [id])
   owner_id Int
   score    Decimal? // not sure yet whether this will be maintained or calculated
-  Purchase Purchase[]
-  Listing  Listing[]
+  Transaction Transaction[]
 
   @@index([address]) // support identifying new accounts
   @@index([owner_id])
@@ -87,23 +86,22 @@ model Nft {
   collection    Collection @relation(fields: [collection_id], references: [id])
   collection_id Int
   collection_iteration Int
-  Purchase      Purchase[]
-  Listing       Listing[]
+  Transaction   Transaction[]
 
   @@index([mint_year, mint_month])
   @@index([collection_id])
 }
 
-// Purchases consist of Primary (from artist) or Secondary (from owners)
-model Purchase {
+// Transaction consist of purchases and listings
+model Transaction {
   id               Int       @id @default(autoincrement())
   transaction_type String
   nft              Nft       @relation(fields: [nft_id], references: [id])
   nft_id           String
   account          TzAccount @relation(fields: [account_id], references: [id])
   account_id       Int
-  price_tz         Decimal
-  price_usd        Decimal
+  price_tz         Decimal? // null for listings
+  price_usd        Decimal? // null for listings
   timestamp        DateTime
   score            Decimal
   normalised_score Decimal
@@ -112,21 +110,6 @@ model Purchase {
   @@index([nft_id])
   @@index([transaction_type])
   @@index([account_id])
-}
-
-// Listings consist of listings and delistings
-model Listing {
-  id               Int       @id @default(autoincrement())
-  transaction_type String
-  nft              Nft       @relation(fields: [nft_id], references: [id])
-  nft_id           String
-  account          TzAccount @relation(fields: [account_id], references: [id])
-  account_id       Int
-  timestamp        DateTime
-  score            Decimal
-  normalised_score Decimal
-
-  @@index([timestamp]) // support collecting most recent listing
 }
 
 // Staging table. collection id, nft id and accountId are in their raw forms

@@ -20,21 +20,14 @@ exports.summary_stats = [
       nftCount,
       ownerCount,
       accountCount,
-      purchaseData,
-      listingData,
+      transactionData,
     ] = await Promise.all([
       prisma.artist.count(),
       prisma.collection.count(),
       prisma.nft.count(),
       prisma.tzAccountOwner.count(),
       prisma.tzAccount.count(),
-      prisma.purchase.groupBy({
-        by: ["transaction_type"],
-        _count: {
-          id: true,
-        },
-      }),
-      prisma.listing.groupBy({
+      prisma.transaction.groupBy({
         by: ["transaction_type"],
         _count: {
           id: true,
@@ -43,18 +36,18 @@ exports.summary_stats = [
     ]);
 
     // Group by outputs a bit messy
-    const primaryPurchaseCount = purchaseData.find(
+    const primaryPurchaseCount = transactionData.find(
       (purchase) =>
         purchase.transaction_type === TRANSACTION_TYPES.PRIMARY_PURCHASE
     )._count.id;
-    const secondaryPurchaseCount = purchaseData.find(
+    const secondaryPurchaseCount = transactionData.find(
       (purchase) =>
         purchase.transaction_type === TRANSACTION_TYPES.SECONDARY_PURCHASE
     )._count.id;
-    const listingCount = listingData.find(
+    const listingCount = transactionData.find(
       (listing) => listing.transaction_type === TRANSACTION_TYPES.LISTING
     )._count.id;
-    const delistingCount = listingData.find(
+    const delistingCount = transactionData.find(
       (listing) => listing.transaction_type === TRANSACTION_TYPES.DELISTING
     )._count.id;
 

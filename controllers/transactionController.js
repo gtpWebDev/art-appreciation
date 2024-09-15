@@ -23,12 +23,8 @@ exports.single_nft = [
       res.status(400).json({ success: false, msg: "Invalid nft id" });
     } else {
       const transactions = await prisma.$queryRaw`
-        SELECT transaction_type, nft_id, account_id, id AS purchase_id, timestamp, price_tz, score
-        FROM "Purchase"
-        WHERE "nft_id" = ${req.params.nftId}
-        UNION ALL
-        SELECT transaction_type, nft_id, account_id, id AS listing_id, timestamp, null as price_tz, score
-        FROM "Listing"
+        SELECT transaction_type, nft_id, account_id, id AS purchase_id, timestamp, price_tz, price_usd, score, normalised_score
+        FROM "Transaction"
         WHERE "nft_id" = ${req.params.nftId}
         ORDER BY timestamp ASC;
       `;
